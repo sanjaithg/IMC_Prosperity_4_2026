@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+venv/
+.venv/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+__MACOSX/
+
+# Backtest run artifacts (regenerated locally)
+*.log
+backtests/
+backtest_results/
+viz_*.html
+*.bak
+
+# ---------------------------------------------------------------------------
+# Large market-data files are committed by default so backtests run out of the
+# box (~110 MB of this lives in round5/data). If you want a lean repo, UNCOMMENT
+# the block below to stop tracking the heavy price CSVs (keep the small trades
+# files). Then re-fetch the data into each round's data/ folder when needed.
+# ---------------------------------------------------------------------------
+# */data/prices_round_*.csv

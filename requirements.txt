@@ -1,0 +1,20 @@
+# IMC Prosperity 2025 — Python dependencies
+# Install with:  python3 -m venv venv && ./venv/bin/pip install -r requirements.txt
+
+# Core numerics / data
+numpy
+pandas
+scipy
+
+# Strategy research / clustering
+scikit-learn
+networkx
+
+# Backtester serialization
+jsonpickle
+
+# Visualizers & dashboards (tools/, round4/visualizers/, round5/research/)
+plotly
+dash
+matplotlib
+seaborn
