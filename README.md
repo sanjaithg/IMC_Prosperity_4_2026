@@ -24,7 +24,8 @@ IMC-Prosperity-2025/
 │   ├── log_visualizer.py          algorithm execution-log viewer
 │   └── backtest_log_visualizer.py charts from backtester PnL/fills output
 │
-├── round1-tutorial/           ← Tutorial / Round 1  (EMERALD, TOMATO, OSMIUM, PEPPER)
+├── tutorial/                  ← Tutorial round      (TOMATO, EMERALD)
+├── round1/                    ← Round 1             (PEPPER, OSMIUM)
 ├── round2/                    ← Round 2             (baskets / spreads, PEPPER + OSMIUM)
 ├── round3/                    ← Round 3             (HYDROGEL, VELVETFRUIT, VEV vouchers)
 ├── round4/                    ← Round 4             (R3 instruments + counterparty "Marks")
@@ -59,16 +60,21 @@ notebooks, `round5/research/`, `round5/docs/`).
 python3 -m venv venv
 ./venv/bin/pip install -r requirements.txt
 
-# 2. Run a backtest for a given round (run from inside that round's folder)
-cd round5
+# 2. Run a backtest (from inside that round's folder). Two CLI styles exist:
+
+#    a) tutorial / round1 / round2  →  positional trader + --data
+cd round2
+../venv/bin/python backtester.py strategies/final_362616_pnl98k.py --data data
+
+#    b) round3 / round4 / round5    →  --submission + --data-dir
+cd ../round5
 ../venv/bin/python backtester.py --submission strategies/submission_10_full_directional_pnl688k.py --data-dir data
 
 # 3. Explore the market data interactively
 ../venv/bin/python ../tools/data_visualizer.py --data data --no-browser
 ```
 
-> CLI flags vary slightly per round's backtester — run `python backtester.py --help`, or see
-> each round's `README.md` for the exact commands.
+> Run `python backtester.py --help` in any round, or see that round's `README.md`, for exact flags.
 
 ---
 
@@ -78,7 +84,8 @@ Best backtested 3-day PnL per round (see each round README for the full ranking 
 
 | Round | Headline products | Best kept strategy | Backtest PnL |
 | :---- | :---------------- | :----------------- | -----------: |
-| Tutorial / R1 | EMERALD, TOMATO, OSMIUM, PEPPER | `pepper_risk_taking.py` (inventory core) | dev-stage |
+| Tutorial | TOMATO, EMERALD | `tomato_hybrid.py` (EMA fair value) | **+17,818** |
+| Round 1 | PEPPER, OSMIUM | `pepper_risk_taking.py` (inventory core) | **+274,844** |
 | Round 2 | PEPPER, OSMIUM (spreads) | `final_362616_pnl98k.py` | **+98,131** |
 | Round 3 | HYDROGEL, VELVETFRUIT, VEV vouchers | `final_submission_pnl28k.py` | **+28,156** |
 | Round 4 | R3 instruments + "Mark" counterparties | `final_submission_round4_pnl64k.py` | **+64,576** |

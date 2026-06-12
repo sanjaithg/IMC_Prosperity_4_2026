@@ -26,3 +26,6 @@ viz_*.html
 # files). Then re-fetch the data into each round's data/ folder when needed.
 # ---------------------------------------------------------------------------
 # */data/prices_round_*.csv
+
+# backtester per-day json output
+backtest_*.json

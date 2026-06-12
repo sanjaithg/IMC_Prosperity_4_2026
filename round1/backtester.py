@@ -77,6 +77,8 @@ def load_trader(trader_path):
 POSITION_LIMITS = {
     "EMERALDS": 80,
     "TOMATOES": 80,
+    "ASH_COATED_OSMIUM": 80,
+    "INTARIAN_PEPPER_ROOT": 80,
 }
 
 
@@ -96,65 +98,112 @@ def build_order_depth(row) -> OrderDepth:
 
 
 def match_orders(orders: List[Order], order_depth: OrderDepth,
+                 market_trades: List[Trade],
                  position: int, product: str) -> Tuple[List[Trade], int]:
     """
-    Match trader's orders against the order book.
+    Match trader's orders against the order book AND market trades.
     Returns list of fills and new position.
 
     Rules:
-    - Buy orders fill against sell_orders (asks) if buy_price >= ask_price
-    - Sell orders fill against buy_orders (bids) if sell_price <= bid_price
-    - Fill at the BOOK price (price improvement for the trader)
-    - Position limits enforced
+    1. Aggressive: Buy orders fill against resting asks if buy_price >= ask_price
+    2. Aggressive: Sell orders fill against resting bids if sell_price <= bid_price
+    3. Passive: Buy orders fill if a market trade occurs at price P <= buy_price
+    4. Passive: Sell orders fill if a market trade occurs at price P >= sell_price
+    5. Fill at the BOOK price for aggressive, or at the TRADE price for passive.
+    6. Position limits enforced.
     """
     fills: List[Trade] = []
     limit = POSITION_LIMITS.get(product, 50)
+    
+    # Track available volume in the book for this tick
+    resting_asks = dict(order_depth.sell_orders)
+    resting_bids = dict(order_depth.buy_orders)
+    
+    # Track available "passive" volume from market trades for this tick
+    # (We assume we can only be part of a market trade up to its volume)
+    available_trade_vol = {} 
+    for mt in market_trades:
+        available_trade_vol[mt.price] = available_trade_vol.get(mt.price, 0) + mt.quantity
 
+    if orders:
+        has_large = any(abs(o.quantity) > 50 for o in orders)
+        if has_large:
+            print(f"  [Engine] {product} Orders: {[str(o) for o in orders]}")
+            
     for order in orders:
         if order.quantity > 0:
-            # BUY order — match against asks
-            for ask_price in sorted(order_depth.sell_orders.keys()):
+            # --- 1. Aggressive Buying (cross the spread) ---
+            for ask_price in sorted(resting_asks.keys()):
                 if order.price >= ask_price:
-                    available = -order_depth.sell_orders[ask_price]  # make positive
-                    if available <= 0:
-                        continue
+                    print(f"  [Engine] {product} AGGRESSIVE BUY FILL at {ask_price}")
+                    available = -resting_asks[ask_price]
+                    if available <= 0: continue
+                    
                     max_buy = limit - position
-                    if max_buy <= 0:
-                        break
+                    if max_buy <= 0: break
+                    
                     fill_qty = min(order.quantity, available, max_buy)
                     if fill_qty > 0:
-                        fills.append(Trade(
-                            symbol=product, price=ask_price,
-                            quantity=fill_qty, buyer="SUBMISSION",
-                            seller="", timestamp=0))
+                        fills.append(Trade(product, ask_price, fill_qty, "SUBMISSION", "", 0))
                         position += fill_qty
-                        order_depth.sell_orders[ask_price] += fill_qty  # reduce available (less negative)
+                        resting_asks[ask_price] += fill_qty
                         order.quantity -= fill_qty
-                    if order.quantity <= 0:
-                        break
+                if order.quantity <= 0 or limit - position <= 0: break
+
+            # --- 2. Passive Buying (get hit by market trades) ---
+            if order.quantity > 0 and (limit - position > 0):
+                for t_price in sorted(available_trade_vol.keys()):
+                    if t_price <= order.price:
+                        available = available_trade_vol[t_price]
+                        if available <= 0: continue
+                        
+                        max_buy = limit - position
+                        if max_buy <= 0: break
+                        
+                        fill_qty = min(order.quantity, available, max_buy)
+                        if fill_qty > 0:
+                            fills.append(Trade(product, t_price, fill_qty, "SUBMISSION", "MARKET", 0))
+                            position += fill_qty
+                            available_trade_vol[t_price] -= fill_qty
+                            order.quantity -= fill_qty
+                    if order.quantity <= 0 or limit - position <= 0: break
 
         elif order.quantity < 0:
-            # SELL order — match against bids
             sell_qty = abs(order.quantity)
-            for bid_price in sorted(order_depth.buy_orders.keys(), reverse=True):
+            # --- 1. Aggressive Selling (cross the spread) ---
+            for bid_price in sorted(resting_bids.keys(), reverse=True):
                 if order.price <= bid_price:
-                    available = order_depth.buy_orders[bid_price]
-                    if available <= 0:
-                        continue
-                    max_sell = limit + position  # how much more we can sell
-                    if max_sell <= 0:
-                        break
+                    available = resting_bids[bid_price]
+                    if available <= 0: continue
+                    
+                    max_sell = limit + position
+                    if max_sell <= 0: break
+                    
                     fill_qty = min(sell_qty, available, max_sell)
                     if fill_qty > 0:
-                        fills.append(Trade(
-                            symbol=product, price=bid_price,
-                            quantity=fill_qty, buyer="",
-                            seller="SUBMISSION", timestamp=0))
+                        fills.append(Trade(product, bid_price, fill_qty, "", "SUBMISSION", 0))
                         position -= fill_qty
-                        order_depth.buy_orders[bid_price] -= fill_qty
+                        resting_bids[bid_price] -= fill_qty
                         sell_qty -= fill_qty
-                    if sell_qty <= 0:
-                        break
+                if sell_qty <= 0 or limit + position <= 0: break
+
+            # --- 2. Passive Selling (get hit by market trades) ---
+            if sell_qty > 0 and (limit + position > 0):
+                for t_price in sorted(available_trade_vol.keys(), reverse=True):
+                    if t_price >= order.price:
+                        available = available_trade_vol[t_price]
+                        if available <= 0: continue
+                        
+                        max_sell = limit + position
+                        if max_sell <= 0: break
+                        
+                        fill_qty = min(sell_qty, available, max_sell)
+                        if fill_qty > 0:
+                            fills.append(Trade(product, t_price, fill_qty, "MARKET", "SUBMISSION", 0))
+                            position -= fill_qty
+                            available_trade_vol[t_price] -= fill_qty
+                            sell_qty -= fill_qty
+                    if sell_qty <= 0 or limit + position <= 0: break
 
     return fills, position
 
@@ -198,25 +247,39 @@ def run_backtest(trader, prices, trades, day, verbose=False):
     own_trades_history: Dict[str, List[Trade]] = {}
 
     results = []
+    log_activities = []
+    all_trades = []
+    
+    mid_prices: Dict[str, float] = {} # Persistent across ticks for PnL consistency
+
+    # Pre-group trades by timestamp for performance
+    trades_by_ts = {}
+    if not day_trades.empty:
+        for ts, group in day_trades.groupby("timestamp"):
+            trades_by_ts[ts] = group.to_dict("records")
+
+    # Pre-group prices by timestamp for performance
+    prices_by_ts = {}
+    for ts, group in day_prices.groupby("timestamp"):
+        prices_by_ts[ts] = group.to_dict("records")
 
     for tick_idx, ts in enumerate(timestamps):
-        tick_rows = day_prices[day_prices["timestamp"] == ts]
+        tick_rows = prices_by_ts.get(ts, [])
+        if not tick_rows:
+            continue
 
         # Build order depths for each product
         order_depths: Dict[str, OrderDepth] = {}
-        mid_prices: Dict[str, float] = {}
 
-        for _, row in tick_rows.iterrows():
+        for row in tick_rows:
             product = row["product"]
             order_depths[product] = build_order_depth(row)
             mid_prices[product] = row["mid_price"]
 
-        # Build market trades (other bots' trades at this timestamp)
         market_trades: Dict[str, List[Trade]] = {}
-        if not day_trades.empty:
-            tick_trades = day_trades[day_trades["timestamp"] == ts]
-            for _, tr in tick_trades.iterrows():
-                sym = tr["symbol"]
+        if ts in trades_by_ts:
+            for tr in trades_by_ts[ts]:
+                sym = tr["product"] if "product" in tr else tr.get("symbol", "")
                 if sym not in market_trades:
                     market_trades[sym] = []
                 market_trades[sym].append(Trade(
@@ -254,10 +317,12 @@ def run_backtest(trader, prices, trades, day, verbose=False):
             if not orders:
                 continue
 
-            # Deep copy the order depth for matching (don't modify the original for PnL calc)
-            od = build_order_depth(tick_rows[tick_rows["product"] == product].iloc[0])
+            # Get the order depth and market trades for matching
+            od = order_depths.get(product)
+            ticker_trades = market_trades.get(product, [])
+            if not od: continue
 
-            fills, new_pos = match_orders(orders, od, positions.get(product, 0), product)
+            fills, new_pos = match_orders(orders, od, ticker_trades, positions.get(product, 0), product)
 
             if fills:
                 own_trades_history[product] = fills
@@ -270,12 +335,13 @@ def run_backtest(trader, prices, trades, day, verbose=False):
                     else:
                         cash[product] = cash.get(product, 0) + fill.price * fill.quantity
                     tick_fills.append(fill)
+                    all_trades.append(fill)
 
         # Calculate PnL
         pnl = calculate_pnl(cash, positions, mid_prices)
         total_pnl = sum(pnl.values())
 
-        # Log
+        # Log for DataFrame
         for product in order_depths:
             results.append({
                 "timestamp": ts,
@@ -289,13 +355,30 @@ def run_backtest(trader, prices, trades, day, verbose=False):
                 "n_fills": len([f for f in tick_fills if f.symbol == product]),
                 "n_orders": len(trader_result.get(product, [])),
             })
+            
+            # Log for visualizer.py
+            od = order_depths[product]
+            log_activities.append({
+                "timestamp": ts,
+                "product": product,
+                "bid_price_1": list(od.buy_orders.keys())[0] if od.buy_orders else 0,
+                "bid_volume_1": list(od.buy_orders.values())[0] if od.buy_orders else 0,
+                "bid_price_2": list(od.buy_orders.keys())[1] if len(od.buy_orders) > 1 else 0,
+                "bid_volume_2": list(od.buy_orders.values())[1] if len(od.buy_orders) > 1 else 0,
+                "bid_price_3": list(od.buy_orders.keys())[2] if len(od.buy_orders) > 2 else 0,
+                "bid_volume_3": list(od.buy_orders.values())[2] if len(od.buy_orders) > 2 else 0,
+                "ask_price_1": list(od.sell_orders.keys())[0] if od.sell_orders else 0,
+                "ask_volume_1": list(od.sell_orders.values())[0] if od.sell_orders else 0,
+                "ask_price_2": list(od.sell_orders.keys())[1] if len(od.sell_orders) > 1 else 0,
+                "ask_volume_2": list(od.sell_orders.values())[1] if len(od.sell_orders) > 1 else 0,
+                "ask_price_3": list(od.sell_orders.keys())[2] if len(od.sell_orders) > 2 else 0,
+                "ask_volume_3": list(od.sell_orders.values())[2] if len(od.sell_orders) > 2 else 0,
+                "mid_price": mid_prices.get(product, 0),
+                "pnl": pnl.get(product, 0),
+                "total_pnl": total_pnl
+            })
 
-        if verbose and tick_fills:
-            for f in tick_fills:
-                side = "BUY" if f.buyer == "SUBMISSION" else "SELL"
-                print(f"  t={ts:>6} {side:>4} {f.symbol:>10} {f.quantity:>3} @ {f.price:>6}  pos={positions.get(f.symbol,0):>4}  pnl={pnl.get(f.symbol,0):>+8.1f}")
-
-    return pd.DataFrame(results)
+    return pd.DataFrame(results), log_activities, all_trades
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -339,6 +422,53 @@ def save_results(results, trader_name, day, output_dir="."):
     results.to_csv(fname, index=False)
     print(f"  Results saved: {fname}")
     return fname
+
+
+def save_log(activities, trades, trader_name, day, output_dir="."):
+    """Save results as .log and .json for visualizer.py."""
+    log_name = f"backtest_{trader_name}_day{day}.log"
+    json_name = f"backtest_{trader_name}_day{day}.json"
+    
+    # Building activitiesLog string
+    log_header = "day;timestamp;product;bid_price_1;bid_volume_1;bid_price_2;bid_volume_2;bid_price_3;bid_volume_3;ask_price_1;ask_volume_1;ask_price_2;ask_volume_2;ask_price_3;ask_volume_3;mid_price;profit_and_loss"
+    log_rows = [log_header]
+    for act in activities:
+        row = f"{day};{act['timestamp']};{act['product']};" \
+              f"{act['bid_price_1']};{act['bid_volume_1']};{act['bid_price_2']};{act['bid_volume_2']};{act['bid_price_3']};{act['bid_volume_3']};" \
+              f"{act['ask_price_1']};{act['ask_volume_1']};{act['ask_price_2']};{act['ask_volume_2']};{act['ask_price_3']};{act['ask_volume_3']};" \
+              f"{act['mid_price']};{act['pnl']}"
+        log_rows.append(row)
+    
+    # Full log data
+    log_data = {
+        "submissionId": f"backtest_{trader_name}",
+        "activitiesLog": "\n".join(log_rows),
+        "tradeHistory": [
+            {
+                "symbol": t.symbol,
+                "price": int(t.price),
+                "quantity": int(t.quantity),
+                "buyer": t.buyer,
+                "seller": t.seller,
+                "timestamp": int(t.timestamp)
+            } for t in trades
+        ]
+    }
+    
+    with open(log_name, "w") as f:
+        json.dump(log_data, f)
+        
+    # Companion JSON for profit/positions
+    total_pnl = activities[-1]["total_pnl"] if activities else 0
+    companion = {
+        "profit": total_pnl,
+        "positions": {} # Could extract if needed
+    }
+    with open(json_name, "w") as f:
+        json.dump(companion, f)
+        
+    print(f"  Log generated: {log_name}")
+    return log_name
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -387,7 +517,7 @@ def main():
         # Reload trader for each day (fresh state)
         trader = load_trader(args.trader)
 
-        results = run_backtest(trader, prices, trades, day, verbose=args.verbose)
+        results, log_activities, log_trades = run_backtest(trader, prices, trades, day, verbose=args.verbose)
         print_summary(results, day)
 
         if not results.empty:
@@ -396,6 +526,8 @@ def main():
 
         if args.save:
             save_results(results, trader_name, day)
+        
+        save_log(log_activities, log_trades, trader_name, day)
 
     if len(days) > 1:
         pnl_color = "\033[92m" if grand_total >= 0 else "\033[91m"

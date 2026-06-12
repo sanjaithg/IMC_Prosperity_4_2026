@@ -19,10 +19,14 @@ Ranked by backtested PnL (final submission snapshots — folder IDs are the plat
 
 ```bash
 cd round2
-python backtester.py --submission strategies/final_362616_pnl98k.py --data-dir data
+python backtester.py strategies/final_362616_pnl98k.py --data data
 ```
 
 `data/` holds the Round 2 price/trade CSVs (`round_2`, days -1 / 0 / 1).
+
+> The `pnl98k` / `pnl96k` in the filenames are the original per-submission recorded figures.
+> Re-running the bundled backtester over all 3 days reproduces **~+238K** for the top strategy
+> (matching engines differ, so absolute numbers vary; the relative ranking holds).
 
 ## Notes
 
